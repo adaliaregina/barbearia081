@@ -1,3 +1,5 @@
+const SUPABASE_URL = "https://wjhivunvmpvvwcdxolvn.supabase.co/rest/v1/";
+const SUPABASE_ANON_KEY = "sb_publishable_mAGpfsNMuAzPIhj634jKmw_qXzZA-_j";
 import React, { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import {
   Home, Megaphone, Target, Wallet, TrendingUp, Lightbulb, Plus, X, Calendar as CalendarIcon,
