@@ -1,6 +1,5 @@
-const SUPABASE_URL = "https://wjhivunvmpvvwcdxolvn.supabase.co/rest/v1/";
-const SUPABASE_ANON_KEY = "sb_publishable_mAGpfsNMuAzPIhj634jKmw_qXzZA-_j";
 import React, { useState, useEffect, useMemo, useCallback, useRef } from "react";
+import { createClient } from "@supabase/supabase-js";
 import {
   Home, Megaphone, Target, Wallet, TrendingUp, Lightbulb, Plus, X, Calendar as CalendarIcon,
   LayoutGrid, Filter, AtSign, PlayCircle, MessageCircle, Video, Search, ChevronLeft, ChevronRight,
@@ -83,62 +82,48 @@ const currentYM = () => {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
 };
 
-// ---------- storage shim ----------
-// window.storage só existe dentro do ambiente do Claude. Fora daqui (rodando local ou publicado),
-// essa "camada de compatibilidade" simula o mesmo comportamento usando o localStorage do navegador,
-// assim o app funciona no seu computador enquanto o banco de dados real (Supabase) não é conectado.
-if (typeof window !== "undefined" && !window.storage) {
-  window.storage = {
-    async get(key) {
-      try {
-        const raw = localStorage.getItem(key);
-        return raw !== null ? { key, value: raw } : null;
-      } catch (e) {
-        return null;
-      }
-    },
-    async set(key, value) {
-      try {
-        localStorage.setItem(key, value);
-        return { key, value };
-      } catch (e) {
-        return null;
-      }
-    },
-    async delete(key) {
-      try {
-        localStorage.removeItem(key);
-        return { key, deleted: true };
-      } catch (e) {
-        return null;
-      }
-    },
-    async list(prefix) {
-      try {
-        const keys = Object.keys(localStorage).filter((k) => !prefix || k.startsWith(prefix));
-        return { keys };
-      } catch (e) {
-        return { keys: [] };
-      }
-    },
-  };
-}
+// ---------- storage helpers (Supabase) ----------
+// 1) Rode no seu projeto: npm install @supabase/supabase-js
+// 2) Cole sua URL e sua anon key do Supabase abaixo (Project Settings → API)
+// 3) No Supabase, crie a tabela "b081_data" com as colunas:
+//    key (text, primary key) | value (text) | updated_at (timestamp, default now())
+const SUPABASE_URL = "https://wjhivunvmpvvwcdxolvn.supabase.co/rest/v1/";
+const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndqaGl2dW52bXB2dndjZHhvbHZuIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODg0MTMwODIsImV4cCI6MjEwMzk4OTA4Mn0.A2x4wVW2Pljd5JlbnoPMDL4MrltFj00gvmlOb4FoVF8";
+const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
-// ---------- storage helpers ----------
 async function loadKey(key, fallback) {
   try {
-    const res = await window.storage.get(key, true);
-    if (res && res.value) return JSON.parse(res.value);
-    return fallback;
+    const { data, error } = await supabase.from("b081_data").select("value").eq("key", key).maybeSingle();
+    if (error || !data) return fallback;
+    return JSON.parse(data.value);
   } catch (e) {
+    console.error("loadKey failed", key, e);
     return fallback;
   }
 }
 async function saveKey(key, value) {
   try {
-    await window.storage.set(key, JSON.stringify(value), true);
+    await supabase.from("b081_data").upsert({ key, value: JSON.stringify(value), updated_at: new Date().toISOString() });
   } catch (e) {
-    console.error("storage set failed", key, e);
+    console.error("saveKey failed", key, e);
+  }
+}
+
+// "Você é..." é uma preferência pessoal do aparelho, não do negócio — fica salva localmente no navegador,
+// não no banco compartilhado, assim cada celular/computador lembra quem está usando ele.
+function loadLocalMe() {
+  try {
+    const raw = localStorage.getItem("b081:me");
+    return raw ? JSON.parse(raw) : "";
+  } catch (e) {
+    return "";
+  }
+}
+function saveLocalMe(value) {
+  try {
+    localStorage.setItem("b081:me", JSON.stringify(value));
+  } catch (e) {
+    console.error("saveLocalMe failed", e);
   }
 }
 
@@ -286,18 +271,12 @@ export default function Barbearia081() {
       setSchedule(sc);
       setMembers(mb === null ? DEFAULT_MEMBERS.map((d) => ({ id: uid(), ...d, photo: "" })) : mb);
       setTrainings(tr);
-      const meRes = await (async () => {
-        try {
-          const r = await window.storage.get("b081:me", false);
-          return r && r.value ? JSON.parse(r.value) : "";
-        } catch (e) { return ""; }
-      })();
-      setMe(meRes);
+      setMe(loadLocalMe());
       setReady(true);
     })();
   }, []);
 
-  useEffect(() => { if (ready) window.storage.set("b081:me", JSON.stringify(me), false).catch(() => {}); }, [me, ready]);
+  useEffect(() => { if (ready) saveLocalMe(me); }, [me, ready]);
 
   useEffect(() => { if (ready) saveKey("b081:marketing", marketing); }, [marketing, ready]);
   useEffect(() => { if (ready) saveKey("b081:goals", goals); }, [goals, ready]);
@@ -1112,12 +1091,33 @@ function PinGate({ pin, onUnlock }) {
   );
 }
 
+function PrintBarChart({ title, data, color }) {
+  if (!data || data.length === 0) return null;
+  return (
+    <div style={{ marginTop: 22, breakInside: "avoid", pageBreakInside: "avoid" }}>
+      <p style={{ fontSize: 13, fontWeight: 700, marginBottom: 6, color: BLUE }}>{title}</p>
+      <BarChart width={520} height={190} data={data}>
+        <CartesianGrid strokeDasharray="3 3" stroke="#eee" />
+        <XAxis dataKey="name" tick={{ fontSize: 10 }} />
+        <YAxis tick={{ fontSize: 10 }} />
+        <Tooltip formatter={(v) => currency(v)} />
+        <Bar dataKey="value" fill={color || BLUE_LIGHT} radius={[4, 4, 0, 0]} />
+      </BarChart>
+    </div>
+  );
+}
+
 function FinancialPrintReport({ report }) {
   if (!report) return null;
   return (
     <div className="print-area" style={{ fontFamily: "system-ui, sans-serif", padding: 32 }}>
-      <h1 style={{ color: BLUE, fontSize: 22, fontWeight: 800, marginBottom: 2 }}>Barbearia 081</h1>
-      <p style={{ fontSize: 15, fontWeight: 700, marginBottom: 2 }}>{report.title}</p>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 4 }}>
+        <img src={LOGO_SRC} style={{ width: 42, height: 42, borderRadius: "50%" }} />
+        <div>
+          <h1 style={{ color: BLUE, fontSize: 20, fontWeight: 800, margin: 0 }}>Barbearia 081</h1>
+          <p style={{ fontSize: 14, fontWeight: 700, margin: 0 }}>{report.title}</p>
+        </div>
+      </div>
       <p style={{ color: "#666", marginBottom: 16, fontSize: 13 }}>{report.subtitle}{report.subscribers != null ? ` · ${report.subscribers} assinantes` : ""}</p>
       <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
         <tbody>
@@ -1144,6 +1144,16 @@ function FinancialPrintReport({ report }) {
           </table>
         </>
       )}
+
+      <p style={{ fontSize: 16, fontWeight: 800, marginTop: 28, color: BLUE, borderTop: "2px solid #eee", paddingTop: 14 }}>Gráficos</p>
+      <PrintBarChart title="Custos fixos por categoria" data={report.fixedBreakdown} color="#F59E0B" />
+      <PrintBarChart title="Custos variáveis por categoria" data={report.variableBreakdown} color="#FB923C" />
+      <PrintBarChart title="Custo total por grupo (fixos, variáveis, barbeiros, investimentos, marketing, sócios)" data={report.categories} color={BLUE} />
+      <PrintBarChart title="Lucro" data={report.lucroBreakdown} color="#10B981" />
+      <PrintBarChart title="Pagamentos por barbeiro" data={report.barberBreakdown} color="#0EA5E9" />
+      <PrintBarChart title="Divisão por sócio" data={report.socioBreakdown} color="#8B5CF6" />
+      <PrintBarChart title="Investimentos por categoria" data={report.investmentBreakdown} color="#EC4899" />
+
       <p style={{ marginTop: 24, fontSize: 10, color: "#999" }}>Gerado em {new Date().toLocaleDateString("pt-BR")}</p>
     </div>
   );
@@ -1160,6 +1170,7 @@ function FinanceiroModule({ financial, setFinancial }) {
   const [newVariableName, setNewVariableName] = useState("");
   const [showSecurity, setShowSecurity] = useState(false);
   const [newPin, setNewPin] = useState("");
+  const [saveStatus, setSaveStatus] = useState(null); // null | 'saving' | 'ok' | 'error'
 
   const months = financial.months;
   const fixedCats = financial.settings.fixedCategories || [];
@@ -1199,6 +1210,16 @@ function FinanceiroModule({ financial, setFinancial }) {
     if (!newPin.trim()) return;
     setFinancial((f) => ({ ...f, settings: { ...f.settings, pin: newPin.trim() } }));
     setNewPin("");
+  }
+  async function manualSave() {
+    setSaveStatus("saving");
+    try {
+      await saveKey("b081:financial", financial);
+      setSaveStatus("ok");
+    } catch (e) {
+      setSaveStatus("error");
+    }
+    setTimeout(() => setSaveStatus(null), 3000);
   }
   function addFixedCat() {
     if (!newFixedName.trim()) return;
@@ -1290,7 +1311,32 @@ function FinanceiroModule({ financial, setFinancial }) {
     return { label: periodLabelFor(gk), lucro: Math.round(agg.lucroDisponivel), assinantes: agg.subscribers };
   });
 
-  function buildReport(title, subtitle, c, subscribers) {
+  function buildReport(title, subtitle, c, subscribers, monthsArr) {
+    const arr = monthsArr || [];
+    const fixedBreakdown = fixedCats
+      .map((cat) => ({ name: cat.name, value: Math.round(arr.reduce((s, m) => s + (Number((m.fixedCosts || {})[cat.id]?.amount) || 0), 0)) }))
+      .filter((x) => x.value > 0);
+    const variableBreakdown = variableCats
+      .map((cat) => ({ name: cat.name, value: Math.round(arr.reduce((s, m) => s + (Number((m.variableCosts || {})[cat.id]?.amount) || 0), 0)) }))
+      .filter((x) => x.value > 0);
+    const barberBreakdown = [
+      { name: "Pedro", value: Math.round(arr.reduce((s, m) => s + (Number((m.barberPayments || {}).pedro) || 0), 0)) },
+      { name: "Pablo", value: Math.round(arr.reduce((s, m) => s + (Number((m.barberPayments || {}).pablo) || 0), 0)) },
+    ].filter((x) => x.value > 0);
+    const investmentBreakdown = INVESTMENT_CATS
+      .map((cat) => ({ name: cat.label, value: Math.round(arr.reduce((s, m) => s + (Number((m.investments || {})[cat.id]) || 0), 0)) }))
+      .filter((x) => x.value > 0);
+    const socioBreakdown = [
+      { name: "Caio (85%)", value: Math.round(c.caio) },
+      { name: "Rafael (15%)", value: Math.round(c.rafael) },
+    ];
+    const lucroBreakdown = [
+      { name: "Lucro disponível", value: Math.round(c.lucroDisponivel) },
+      { name: "Marketing", value: Math.round(c.valorMarketing) },
+      { name: "Restante p/ sócios", value: Math.round(c.valorRestante) },
+    ];
+    const custoTotal = c.fixedTotal + c.variableTotal + c.barberTotal + c.otherInvestments;
+
     return {
       title, subtitle, subscribers,
       rows: [
@@ -1299,6 +1345,7 @@ function FinanceiroModule({ financial, setFinancial }) {
         { label: "Custos variáveis", value: -c.variableTotal },
         { label: "Pagamentos dos barbeiros", value: -c.barberTotal },
         { label: "Investimentos", value: -c.otherInvestments },
+        { label: "Custo total (fixos + variáveis + barbeiros + investimentos)", value: custoTotal, bold: true },
         { label: "Lucro disponível", value: c.lucroDisponivel, bold: true },
         { label: "Marketing", value: -c.valorMarketing },
         { label: "Valor restante para sócios", value: c.valorRestante, bold: true },
@@ -1313,6 +1360,8 @@ function FinanceiroModule({ financial, setFinancial }) {
         { name: "Marketing", value: Math.round(c.valorMarketing) },
         { name: "Sócios", value: Math.round(c.valorRestante) },
       ],
+      fixedBreakdown, variableBreakdown, barberBreakdown, investmentBreakdown, socioBreakdown, lucroBreakdown,
+      custoTotal,
     };
   }
 
@@ -1373,15 +1422,25 @@ function FinanceiroModule({ financial, setFinancial }) {
       </Card>
 
       <Card>
-        <div className="flex items-center justify-between mb-2">
+        <div className="flex items-center justify-between mb-2 gap-2">
           <p className="font-bold text-sm">Lançamentos do mês</p>
-          <button
-            onClick={() => setPrintReport(buildReport("Relatório mensal", monthLabel(ym), calc, data.subscribers))}
-            className="flex items-center gap-1 text-xs font-semibold px-2 py-1 rounded-lg"
-            style={{ color: BLUE, border: `1px solid ${BLUE}` }}
-          >
-            <Printer size={13} /> PDF do mês
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={manualSave}
+              disabled={saveStatus === "saving"}
+              className="flex items-center gap-1 text-xs font-semibold px-2 py-1 rounded-lg text-white"
+              style={{ background: saveStatus === "error" ? "#DC2626" : saveStatus === "ok" ? "#16A34A" : BLUE }}
+            >
+              {saveStatus === "saving" ? "Salvando…" : saveStatus === "ok" ? "Salvo ✓" : saveStatus === "error" ? "Erro ao salvar" : "Salvar mês"}
+            </button>
+            <button
+              onClick={() => setPrintReport(buildReport("Relatório mensal", monthLabel(ym), calc, data.subscribers, [data]))}
+              className="flex items-center gap-1 text-xs font-semibold px-2 py-1 rounded-lg"
+              style={{ color: BLUE, border: `1px solid ${BLUE}` }}
+            >
+              <Printer size={13} /> PDF do mês
+            </button>
+          </div>
         </div>
         <div className="grid grid-cols-2 gap-3">
           <Field label="Valor do sistema (R$)"><TextInput type="number" value={data.systemValue} onChange={(e) => commitMonth({ systemValue: e.target.value })} /></Field>
@@ -1465,6 +1524,8 @@ function FinanceiroModule({ financial, setFinancial }) {
         <Row label="Custos variáveis" value={-calc.variableTotal} />
         <Row label="Pagamentos dos barbeiros" value={-calc.barberTotal} />
         <Row label="Investimentos" value={-calc.otherInvestments} />
+        <div className="border-t border-gray-200 my-2" />
+        <Row label="Custo total (fixos + variáveis + barbeiros + investimentos)" value={-(calc.fixedTotal + calc.variableTotal + calc.barberTotal + calc.otherInvestments)} bold />
         <div className="border-t border-gray-200 my-2" />
         <Row label="Lucro disponível" value={calc.lucroDisponivel} bold />
         <Row label={`Marketing (${pct}%)`} value={-calc.valorMarketing} />
@@ -1604,7 +1665,7 @@ function FinanceiroModule({ financial, setFinancial }) {
                   <p className="text-xs text-gray-400">{currency(s.agg.lucroDisponivel)} · {s.agg.subscribers} assinantes</p>
                 </div>
                 <button
-                  onClick={() => setPrintReport(buildReport(`Relatório ${period}`, s.label, s.agg, s.agg.subscribers))}
+                  onClick={() => setPrintReport(buildReport(`Relatório ${period}`, s.label, s.agg, s.agg.subscribers, groups[s.key].map((k) => months[k])))}
                   className="p-2 rounded-lg"
                   style={{ border: `1px solid ${BLUE}`, color: BLUE }}
                 >
